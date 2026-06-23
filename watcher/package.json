@@ -1,0 +1,15 @@
+{
+  "name": "hermes-dashboard-watcher",
+  "version": "1.0.0",
+  "description": "Watches Hermes agent data files and broadcasts state changes over WebSocket for the Sims-style dashboard.",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5",
+    "chokidar": "^3.6.0"
+  }
+}

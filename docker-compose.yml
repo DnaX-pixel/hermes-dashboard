@@ -1,0 +1,37 @@
+# docker-compose.yml
+#
+# Ni TIDAK menggantikan compose file Hermes sedia ada kau.
+# Run fail ni SEPARATELY (folder lain, contoh: /docker/hermes-dashboard/)
+# supaya kita tak risiko ubah/restart container Hermes yang sedang jalan.
+#
+# Dua service baru:
+#   - watcher:   baca data Hermes (read-only), emit state via WebSocket
+#   - dashboard: serve frontend 3D room (Three.js) + IDE chrome (light mode)
+#
+# PENTING: tukar HERMES_DATA_PATH bawah kalau path sebenar kau lain.
+
+services:
+  watcher:
+    build: ./watcher
+    container_name: hermes-dashboard-watcher
+    restart: unless-stopped
+    environment:
+      - DATA_ROOT=/opt/data
+      - PORT=4500
+    volumes:
+      # :ro = read-only. Watcher TIDAK boleh tulis/ubah apa-apa dalam data Hermes.
+      - /docker/hermes-agent-o8vg/data:/opt/data:ro
+    # TIDAK expose port ke host lagi - watcher cuma boleh diakses melalui
+    # network Docker dalaman (oleh service "dashboard" via nginx proxy).
+    # Ini bermakna cuma SATU port (4501) perlu dibuka di firewall VPS/provider.
+    expose:
+      - "4500"
+
+  dashboard:
+    build: ./dashboard
+    container_name: hermes-dashboard-frontend
+    restart: unless-stopped
+    ports:
+      - "4501:80"
+    depends_on:
+      - watcher
