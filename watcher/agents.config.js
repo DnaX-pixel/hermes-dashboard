@@ -24,9 +24,10 @@ module.exports = [
     watch: {
       type: "sessionFile",
       path: "sessions/sessions.json",
-      // "match" - substring/regex untuk cari entry session yang berkaitan agent ni
-      // Sesuaikan ni lepas kita tengok isi sebenar sessions.json
-      match: /hermes/i,
+      // Tiada "match" - struktur sebenar sessions.json tak ada field yang
+      // bezakan subagent. Hermes dianggap "active" kalau MANA-MANA session
+      // (Telegram/Discord/dll) ada updated_at dalam 30s terakhir.
+      // Lihat watchers/sessionFile.js untuk logic penuh.
     },
   },
   {
