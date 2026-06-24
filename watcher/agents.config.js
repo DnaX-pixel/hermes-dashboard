@@ -36,7 +36,10 @@ module.exports = [
         type: "sessionFile",
         path: "sessions/sessions.json",
         // Hermes dianggap "active" kalau MANA-MANA session ada updated_at dalam 30s terakhir.
-        // Lihat watchers/sessionFile.js untuk logic penuh.
+        // expensePilotChannelId: kalau session yang aktif adalah dari Discord channel ni,
+        // label akan tunjuk "ExpensePilot" (bukan nama session biasa) — sebab Hermes
+        // sedang dalam "ExpensePilot mode" bila message masuk dari channel ni.
+        expensePilotChannelId: "1518482044563488800",
       },
       {
         // Watcher 2: detect aktiviti expense/debt (ExpensePilot adalah personality
