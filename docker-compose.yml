@@ -18,9 +18,14 @@ services:
     environment:
       - DATA_ROOT=/opt/data
       - PORT=4500
+      - GOOGLE_CREDENTIALS_PATH=/opt/credentials/google-service-account.json
     volumes:
       # :ro = read-only. Watcher TIDAK boleh tulis/ubah apa-apa dalam data Hermes.
       - /docker/hermes-agent-o8vg/data:/opt/data:ro
+      # Service Account JSON key untuk Google Sheets (read-only scope).
+      # File ni TIDAK masuk git repo - letak terus kat VPS di path bawah.
+      # Lihat watcher/google-service-account.json.example untuk format.
+      - ./watcher/google-service-account.json:/opt/credentials/google-service-account.json:ro
     # TIDAK expose port ke host lagi - watcher cuma boleh diakses melalui
     # network Docker dalaman (oleh service "dashboard" via nginx proxy).
     # Ini bermakna cuma SATU port (4501) perlu dibuka di firewall VPS/provider.

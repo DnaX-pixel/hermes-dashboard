@@ -7,6 +7,7 @@ package-lock.json.bak
 .env.local
 *.pem
 *.key
+google-service-account.json
 
 # OS / editor noise
 .DS_Store

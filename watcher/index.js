@@ -15,6 +15,7 @@ const agents = require("./agents.config");
 const sessionFileWatcher = require("./watchers/sessionFile");
 const csvAppendWatcher = require("./watchers/csvAppend");
 const logTailWatcher = require("./watchers/logTail");
+const googleSheetsPollWatcher = require("./watchers/googleSheetsPoll");
 
 const DATA_ROOT = process.env.DATA_ROOT || "/opt/data";
 const PORT = process.env.PORT || 4500;
@@ -23,6 +24,7 @@ const WATCHER_TYPES = {
   sessionFile: sessionFileWatcher,
   csvAppend: csvAppendWatcher,
   logTail: logTailWatcher,
+  googleSheetsPoll: googleSheetsPollWatcher,
 };
 
 const app = express();

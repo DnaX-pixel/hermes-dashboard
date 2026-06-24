@@ -34,6 +34,65 @@ gagal walaupun firewall block CDN luar:
 - Google Fonts (Inter/JetBrains Mono) -> masih dari CDN, tapi degrade ke font
   sistem kalau di-block (tak rosakkan layout)
 
+## Setup ExpensePilot (Google Sheets watcher)
+
+ExpensePilot kini menulis data ke **Google Sheets** (bukan CSV lokal lagi), jadi
+watcher perlu kredential Google untuk baca Sheet tu (read-only).
+
+### 1. Buat Service Account di Google Cloud Console
+
+1. https://console.cloud.google.com/iam-admin/serviceaccounts -> pilih/buat project
+2. Enable **Google Sheets API** (APIs & Services -> Library)
+3. **+ Create Service Account** -> bagi nama (cth `hermes-dashboard-watcher`) -> skip
+   role/access -> **Done**
+4. Klik service account tu -> tab **Keys** -> **Add Key** -> **Create new key** -> **JSON**
+5. Fail JSON auto-download
+
+### 2. Share Google Sheet dengan service account
+
+1. Buka fail JSON, copy nilai `client_email` (cth `xxx@xxx.iam.gserviceaccount.com`)
+2. Buka Google Sheet ExpensePilot -> **Share** -> paste email tu -> role **Viewer** -> **Send**
+
+### 3. Letak fail JSON kat VPS
+
+```bash
+# Dari laptop kau (scp / WinSCP / FileZilla)
+scp google-service-account.json root@<vps-ip>:/docker/hermes-dashboard/watcher/google-service-account.json
+```
+
+Fail ni **TIDAK** masuk git repo (`.gitignore` dah exclude). Lihat
+`watcher/google-service-account.json.example` untuk struktur yang dijangka.
+
+`docker-compose.yml` akan mount fail ni read-only ke dalam container watcher
+secara automatik (path `./watcher/google-service-account.json` relatif kepada
+folder projek ni kat VPS).
+
+### 4. Sesuaikan config kalau Sheet ID / nama tab berbeza
+
+Dalam `watcher/agents.config.js`, agent `expensepilot` ada `spreadsheetId` dan
+senarai `sheets` (satu entry per tab, cth "Expenses" dan "Debts"). Kalau Sheet
+ID atau nama tab kau berbeza, sesuaikan kat sini. `labelFrom` tentukan macam
+mana label dipaparkan dalam dashboard apabila row baru dikesan.
+
+### 5. Test
+
+```bash
+docker compose up -d --build
+docker logs -f hermes-dashboard-watcher
+```
+
+Tambah satu row baru dalam Sheet (Expenses atau Debts), tunggu sehingga
+`pollIntervalMs` (default 10 saat) berlalu — patut nampak baris log:
+
+```
+[state] expensepilot -> logging Kopi Tuaran - RM5.00
+```
+
+Kalau tak nampak apa-apa, semak:
+- `docker logs hermes-dashboard-watcher` ada error berkaitan credentials/permission?
+- Nama tab dalam config sama dengan nama tab sebenar dalam Sheet (case-sensitive)?
+- Service account dah betul-betul di-**Share** sebagai Viewer pada Sheet tu?
+
 ## Setup
 
 ```bash
