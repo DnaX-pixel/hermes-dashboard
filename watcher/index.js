@@ -55,16 +55,21 @@ function handleStateChange(agentId, partialState) {
   );
 }
 
-// Start a watcher per agent, based on its configured watch.type
+// Start watcher(s) per agent. agent.watch boleh object (satu watcher) atau
+// array (berbilang watcher untuk agent yang sama, cth Hermes: sessionFile + googleSheetsPoll).
 const stopFns = [];
 agents.forEach((agent) => {
-  const handler = WATCHER_TYPES[agent.watch.type];
-  if (!handler) {
-    console.warn(`[warn] No watcher handler for type "${agent.watch.type}" (agent: ${agent.id})`);
-    return;
-  }
-  const stop = handler.start(agent, DATA_ROOT, handleStateChange);
-  if (typeof stop === "function") stopFns.push(stop);
+  const watchConfigs = Array.isArray(agent.watch) ? agent.watch : [agent.watch];
+  watchConfigs.forEach((watchCfg) => {
+    const handler = WATCHER_TYPES[watchCfg.type];
+    if (!handler) {
+      console.warn(`[warn] No watcher handler for type "${watchCfg.type}" (agent: ${agent.id})`);
+      return;
+    }
+    // Pass agent dengan watch config yang specific untuk watcher ni
+    const stop = handler.start({ ...agent, watch: watchCfg }, DATA_ROOT, handleStateChange);
+    if (typeof stop === "function") stopFns.push(stop);
+  });
 });
 
 app.get("/health", (req, res) => res.json({ ok: true, agents: agents.map((a) => a.id) }));
@@ -77,6 +82,8 @@ app.get("/api/agents", (req, res) => {
       name: a.name,
       color: a.color,
       room: a.room,
+      hasVault: a.hasVault || false,
+      hasMonitor: a.hasMonitor || false,
     }))
   );
 });

@@ -23,58 +23,48 @@ module.exports = [
     id: "hermes",
     name: "Hermes",
     color: "#3b6fe0",
-    room: { x: 120, y: 160 },
-    watch: {
-      type: "sessionFile",
-      path: "sessions/sessions.json",
-      // Tiada "match" - struktur sebenar sessions.json tak ada field yang
-      // bezakan subagent. Hermes dianggap "active" kalau MANA-MANA session
-      // (Telegram/Discord/dll) ada updated_at dalam 30s terakhir.
-      // Lihat watchers/sessionFile.js untuk logic penuh.
-    },
-  },
-  {
-    id: "expensepilot",
-    name: "ExpensePilot",
-    color: "#2ea043",
-    room: { x: 360, y: 220 },
-    watch: {
-      type: "googleSheetsPoll",
-      spreadsheetId: "1EFxXhmi60Mqk7tDZk0CxvOiuXKOm4Zj-A5wOKcymVA8",
-      credentialsPath: process.env.GOOGLE_CREDENTIALS_PATH || "/opt/credentials/google-service-account.json",
-      pollIntervalMs: 10000, // poll setiap 10 saat
-      actionDurationMs: 5500, // hard cap - paksa balik idle selepas tempoh ni walau apa pun sequence LLM
-      llm: {
-        baseUrl: "https://ollama.com",
-        apiKey: process.env.OLLAMA_API_KEY,
-        model: "gpt-oss:20b-cloud",
-        timeoutMs: 12000, // kalau Ollama Cloud tak respons dalam tempoh ni, guna fallback
+    room: { x: 240, y: 200 },
+    // hasVault: bina vault + kalkulator dalam room (Hermes handles expense tracking juga)
+    // hasMonitor: bina monitor di meja
+    hasVault: true,
+    hasMonitor: true,
+    // watch boleh array - setiap entry akan distart sebagai watcher berasingan
+    // tapi emit state ke agent ID yang sama ("hermes").
+    watch: [
+      {
+        // Watcher 1: detect bila Hermes sedang active chat (Telegram/Discord/dll)
+        type: "sessionFile",
+        path: "sessions/sessions.json",
+        // Hermes dianggap "active" kalau MANA-MANA session ada updated_at dalam 30s terakhir.
+        // Lihat watchers/sessionFile.js untuk logic penuh.
       },
-      sheets: [
-        {
-          tab: "Expenses",
-          range: "A:S",
-          rowType: "expense", // column header sebenar (row 1): ID, Date, Time, Merchant, Description, Amount, ...
+      {
+        // Watcher 2: detect aktiviti expense/debt (ExpensePilot adalah personality
+        // Hermes, bukan agent berasingan - data tetap masuk Google Sheets yang sama)
+        type: "googleSheetsPoll",
+        spreadsheetId: "1EFxXhmi60Mqk7tDZk0CxvOiuXKOm4Zj-A5wOKcymVA8",
+        credentialsPath: process.env.GOOGLE_CREDENTIALS_PATH || "/opt/credentials/google-service-account.json",
+        pollIntervalMs: 10000,
+        actionDurationMs: 5500,
+        llm: {
+          baseUrl: "https://ollama.com",
+          apiKey: process.env.OLLAMA_API_KEY,
+          model: "gpt-oss:20b-cloud",
+          timeoutMs: 12000,
         },
-        {
-          tab: "Debts",
-          range: "A:X",
-          rowType: "debt", // column header sebenar (row 1): DebtID, DebtType, PersonName, ..., Amount, ...
-        },
-      ],
-    },
+        sheets: [
+          {
+            tab: "Expenses",
+            range: "A:S",
+            rowType: "expense",
+          },
+          {
+            tab: "Debts",
+            range: "A:X",
+            rowType: "debt",
+          },
+        ],
+      },
+    ],
   },
-
-  // === Contoh macam mana nak tambah subagent baru (uncomment & edit) ===
-  // {
-  //   id: "debttracker",
-  //   name: "DebtTracker",
-  //   color: "#d9822b",
-  //   room: { x: 520, y: 160 },
-  //   watch: {
-  //     type: "csvAppend",
-  //     path: "debttracker/debts.csv",
-  //     activeDurationMs: 3000,
-  //   },
-  // },
 ];

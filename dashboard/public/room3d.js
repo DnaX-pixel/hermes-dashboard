@@ -74,19 +74,10 @@ const ROOM3D = (() => {
     torso.castShadow = true;
     g.add(torso);
 
-    // chest panel (per agent)
+    // chest panel (generic vents untuk semua agent)
     const chest = new THREE.Group();
-    if (agent.id === "expensepilot") {
-      const panel = boxMesh(0.5, 0.42, 0.08, mat("#1f3322"), 0, 0.9, 0.36);
-      chest.add(panel);
-      for (let i = 0; i < 3; i++) {
-        chest.add(boxMesh(0.36 - i * 0.04, 0.05, 0.02, mat("#e8e4d8"), 0, 1.0 - i * 0.1, 0.41));
-      }
-    } else {
-      // vents
-      for (let i = 0; i < 3; i++) {
-        chest.add(boxMesh(0.28, 0.05, 0.04, mat("#1b212b"), 0, 1.0 - i * 0.12, 0.38));
-      }
+    for (let i = 0; i < 3; i++) {
+      chest.add(boxMesh(0.28, 0.05, 0.04, mat("#1b212b"), 0, 1.0 - i * 0.12, 0.38));
     }
     g.add(chest);
 
@@ -393,7 +384,7 @@ const ROOM3D = (() => {
     furniture.add(buildChair());
     let vaultRef = null;
     let calcRef = null;
-    if (agent.id === "expensepilot") {
+    if (agent.hasVault) {
       const vault = buildVault();
       vault.position.set(-1.9, 0, -1.4); // back-left, against the wall, clear of the desk
       furniture.add(vault);
@@ -402,7 +393,8 @@ const ROOM3D = (() => {
       calc.position.set(0.3, 0, 0); // on the desk top
       furniture.add(calc);
       calcRef = calc;
-    } else {
+    }
+    if (agent.hasMonitor) {
       const mon = buildMonitor();
       mon.position.set(0, 0, 0);
       furniture.add(mon);
