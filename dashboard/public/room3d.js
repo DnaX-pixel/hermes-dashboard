@@ -131,6 +131,8 @@ const ROOM3D = (() => {
   }
 
   // ---- furniture builders (enhanced, light-mode tones) ----
+
+  // Meja biasa (untuk worker / agent biasa)
   function buildDesk() {
     const grp = new THREE.Group();
     const topMat = mat("#c8a87e", { roughness: 0.6, metalness: 0.05 }); // warm wood top
@@ -143,6 +145,62 @@ const ROOM3D = (() => {
     [[-lx, -lz], [lx, -lz], [-lx, lz], [lx, lz]].forEach(([x, z]) => {
       grp.add(boxMesh(0.1, 0.78, 0.1, legMat, x, 0.39, z));
     });
+    return grp;
+  }
+
+  // Executive desk untuk boss (Hermes) — lebih lebar, kayu mahogany gelap,
+  // ada nameplate & trim gold supaya nampak "big boss" vibe.
+  function buildBossDesk() {
+    const grp = new THREE.Group();
+    const topMat = mat("#5c3317", { roughness: 0.45, metalness: 0.08 }); // mahogany gelap
+    const trimMat = mat("#c8a84e", { roughness: 0.3, metalness: 0.7 }); // trim gold
+    const legMat = mat("#3d2b1a", { roughness: 0.5, metalness: 0.15 });
+    // top — lebar 2.6 (bigger than normal desk 2.0)
+    grp.add(boxMesh(2.6, 0.16, 1.2, topMat, 0, 0.82, 0));
+    // gold edge trim
+    grp.add(boxMesh(2.62, 0.05, 1.22, trimMat, 0, 0.745, 0));
+    // front panel (modesty panel bawah meja)
+    grp.add(boxMesh(2.4, 0.5, 0.06, mat("#4a2a10"), 0, 0.52, 0.58));
+    // nameplate di atas meja (gold strip kecil)
+    grp.add(boxMesh(0.7, 0.05, 0.18, trimMat, 0, 0.91, 0.45));
+    grp.add(boxMesh(0.65, 0.02, 0.14, mat("#1e293b"), 0, 0.935, 0.45));
+    // legs (4 sudut, tebal & dark wood)
+    const lx = 1.15, lz = 0.5;
+    [[-lx, -lz], [lx, -lz], [-lx, lz], [lx, lz]].forEach(([x, z]) => {
+      grp.add(boxMesh(0.14, 0.8, 0.14, legMat, x, 0.4, z));
+    });
+    return grp;
+  }
+
+  // Kerusi executive untuk boss — lebih tinggi backrest, warna gelap premium
+  function buildBossChair() {
+    const grp = new THREE.Group();
+    const leather = mat("#1a1a2e", { roughness: 0.7 }); // dark navy leather
+    const frame = mat("#c8a84e", { roughness: 0.3, metalness: 0.7 }); // gold frame
+    // seat
+    const seat = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.38, 0.14, 24), leather);
+    seat.position.y = 0.54;
+    seat.castShadow = true;
+    grp.add(seat);
+    // tall backrest (lebih tinggi dari kerusi biasa)
+    grp.add(boxMesh(0.72, 0.9, 0.14, leather, 0, 1.02, -0.32));
+    // headrest kecil di atas backrest
+    grp.add(boxMesh(0.52, 0.22, 0.1, leather, 0, 1.52, -0.3));
+    // armrests
+    grp.add(boxMesh(0.08, 0.06, 0.36, frame, -0.38, 0.72, -0.1));
+    grp.add(boxMesh(0.08, 0.06, 0.36, frame, 0.38, 0.72, -0.1));
+    // central pole + 5-star gold base
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.52, 12), frame);
+    pole.position.y = 0.27;
+    grp.add(pole);
+    for (let i = 0; i < 5; i++) {
+      const ang = (i / 5) * Math.PI * 2;
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.36, 8), frame);
+      leg.rotation.z = Math.PI / 2;
+      leg.rotation.y = ang;
+      leg.position.set(Math.cos(ang) * 0.18, 0.06, Math.sin(ang) * 0.18);
+      grp.add(leg);
+    }
     return grp;
   }
 
@@ -380,8 +438,17 @@ const ROOM3D = (() => {
     // furniture sub-group, placed behind the robot (toward the wall)
     const furniture = new THREE.Group();
     furniture.position.set(0, 0, -0.9);
-    furniture.add(buildDesk());
-    furniture.add(buildChair());
+
+    // Boss (Hermes) dapat executive desk + high-back chair
+    // Worker (ExpensePilot) dapat standard desk + standard chair
+    if (agent.isBoss) {
+      furniture.add(buildBossDesk());
+      furniture.add(buildBossChair());
+    } else {
+      furniture.add(buildDesk());
+      furniture.add(buildChair());
+    }
+
     let vaultRef = null;
     let calcRef = null;
     if (agent.hasVault) {
@@ -737,11 +804,23 @@ const ROOM3D = (() => {
           parts.visorGlow.material.emissiveIntensity += (target - parts.visorGlow.material.emissiveIntensity) * 0.1;
         }
       }
-      // antenna pulse when logging/working/thinking
+      // antenna pulse when logging/working/thinking/directing
       if (parts && parts.tip) {
-        const pulsing = rig.state === "logging" || rig.state === "working" || rig.state === "thinking";
+        const pulsing = rig.state === "logging" || rig.state === "working" || rig.state === "thinking" || rig.state === "directing";
         const target = pulsing ? 0.4 + Math.abs(Math.sin(t * 5)) * 0.9 : 0.4;
         parts.tip.material.emissiveIntensity += (target - parts.tip.material.emissiveIntensity) * 0.15;
+      }
+
+      // "directing" state: boss visor flash emas + speech bubble sekali je masa mula
+      if (rig.state === "directing" && !rig._directingStarted) {
+        rig._directingStarted = true;
+        // Visor flash gold — boss tengah bagi arahan
+        visorFlash(rig, "#f59e0b");
+        setSpeechBubble(rig, "Handle this.", "think");
+      }
+      if (rig.state !== "directing" && rig._directingStarted) {
+        rig._directingStarted = false;
+        setSpeechBubble(rig, null); // clear bubble bila directing habis
       }
 
       // selected: gentle full-rig spin offset (subtle yaw wobble)

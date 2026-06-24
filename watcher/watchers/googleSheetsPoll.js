@@ -121,6 +121,21 @@ function start(agent, dataRoot, onStateChange) {
             rowType === "debt"
               ? `Hutang: ${newest.PersonName || "?"} - RM${Number(newest.Amount || 0).toFixed(2)}`
               : `${newest.Merchant || newest.Description || "Expense"} - RM${Number(newest.Amount || 0).toFixed(2)}`;
+
+          // Notify boss agent (Hermes) untuk buat "directing" gesture —
+          // visual naratif: boss bagi arahan, worker buat kerja.
+          if (agent.bossAgentId) {
+            onStateChange(agent.bossAgentId, {
+              state: "directing",
+              label: `Directing: ${quickLabel}`,
+              decision: null,
+            });
+            // Boss balik idle selepas 4s (lepas worker mula bergerak)
+            setTimeout(() => {
+              onStateChange(agent.bossAgentId, { state: "idle", label: "Idle", decision: null });
+            }, 4000);
+          }
+
           onStateChange(agent.id, { state: "logging", label: quickLabel, decision: null });
 
           let decision;

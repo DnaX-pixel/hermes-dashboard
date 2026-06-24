@@ -19,55 +19,57 @@
 // OLLAMA_API_KEY (env var) = API key Ollama Cloud (https://ollama.com/settings/keys)
 
 module.exports = [
+  // ── HERMES (Boss / CEO) ────────────────────────────────────────────────────
+  // Hermes adalah agent utama. Dia duduk di executive desk, pantau semua
+  // aktiviti, dan "beri arahan" kepada ExpensePilot bila ada expense/debt baru.
+  // Watcher: sessionFile sahaja — Hermes detect bila dia sedang "on duty" (active chat).
   {
     id: "hermes",
     name: "Hermes",
     color: "#3b6fe0",
-    room: { x: 240, y: 200 },
-    // hasVault: bina vault + kalkulator dalam room (Hermes handles expense tracking juga)
-    // hasMonitor: bina monitor di meja
-    hasVault: true,
+    room: { x: 120, y: 160 },
+    isBoss: true,       // render executive desk + boss visual treatment
     hasMonitor: true,
-    // watch boleh array - setiap entry akan distart sebagai watcher berasingan
-    // tapi emit state ke agent ID yang sama ("hermes").
-    watch: [
-      {
-        // Watcher 1: detect bila Hermes sedang active chat (Telegram/Discord/dll)
-        type: "sessionFile",
-        path: "sessions/sessions.json",
-        // Hermes dianggap "active" kalau MANA-MANA session ada updated_at dalam 30s terakhir.
-        // expensePilotChannelId: kalau session yang aktif adalah dari Discord channel ni,
-        // label akan tunjuk "ExpensePilot" (bukan nama session biasa) — sebab Hermes
-        // sedang dalam "ExpensePilot mode" bila message masuk dari channel ni.
-        expensePilotChannelId: "1518482044563488800",
+    hasVault: false,
+    watch: {
+      type: "sessionFile",
+      path: "sessions/sessions.json",
+      // Bila session dari #expensepilot Discord channel, label tunjuk "ExpensePilot mode"
+      expensePilotChannelId: "1518482044563488800",
+    },
+  },
+
+  // ── EXPENSEPILOT (Worker) ──────────────────────────────────────────────────
+  // ExpensePilot adalah skill/personality Hermes yang handle semua expense tracking.
+  // Secara teknikal dia "dihantar" oleh Hermes untuk buat kerja di vault.
+  // Watcher: googleSheetsPoll — detect bila ada expense/debt baru dalam Sheets.
+  // Bila row baru dikesan: ExpensePilot buat animasi vault, DAN Hermes buat
+  // "directing" gesture (speech bubble) menandakan dia yang beri arahan.
+  {
+    id: "expensepilot",
+    name: "ExpensePilot",
+    color: "#2ea043",
+    room: { x: 360, y: 220 },
+    isBoss: false,
+    hasVault: true,
+    hasMonitor: false,
+    bossAgentId: "hermes", // ID boss yang akan dapat "directing" notification
+    watch: {
+      type: "googleSheetsPoll",
+      spreadsheetId: "1EFxXhmi60Mqk7tDZk0CxvOiuXKOm4Zj-A5wOKcymVA8",
+      credentialsPath: process.env.GOOGLE_CREDENTIALS_PATH || "/opt/credentials/google-service-account.json",
+      pollIntervalMs: 10000,
+      actionDurationMs: 5500,
+      llm: {
+        baseUrl: "https://ollama.com",
+        apiKey: process.env.OLLAMA_API_KEY,
+        model: "gpt-oss:20b-cloud",
+        timeoutMs: 12000,
       },
-      {
-        // Watcher 2: detect aktiviti expense/debt (ExpensePilot adalah personality
-        // Hermes, bukan agent berasingan - data tetap masuk Google Sheets yang sama)
-        type: "googleSheetsPoll",
-        spreadsheetId: "1EFxXhmi60Mqk7tDZk0CxvOiuXKOm4Zj-A5wOKcymVA8",
-        credentialsPath: process.env.GOOGLE_CREDENTIALS_PATH || "/opt/credentials/google-service-account.json",
-        pollIntervalMs: 10000,
-        actionDurationMs: 5500,
-        llm: {
-          baseUrl: "https://ollama.com",
-          apiKey: process.env.OLLAMA_API_KEY,
-          model: "gpt-oss:20b-cloud",
-          timeoutMs: 12000,
-        },
-        sheets: [
-          {
-            tab: "Expenses",
-            range: "A:S",
-            rowType: "expense",
-          },
-          {
-            tab: "Debts",
-            range: "A:X",
-            rowType: "debt",
-          },
-        ],
-      },
-    ],
+      sheets: [
+        { tab: "Expenses", range: "A:S", rowType: "expense" },
+        { tab: "Debts", range: "A:X", rowType: "debt" },
+      ],
+    },
   },
 ];
