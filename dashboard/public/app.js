@@ -104,7 +104,7 @@ function buildRoom() {
 }
 function refreshRoomVisualState() {
   Object.values(agents).forEach((a) => {
-    ROOM3D.setAgentState(a.id, a.state, a.id === selectedAgentId);
+    ROOM3D.setAgentState(a.id, a.state, a.id === selectedAgentId, a.action);
   });
 }
 
@@ -122,6 +122,8 @@ function applyStateUpdate(update) {
   const stateChanged = a.state !== update.state;
   a.state = update.state;
   a.label = update.label;
+  a.action = update.action || null;
+  a.meta = update.meta || null;
   a.updated_at = update.updated_at || Date.now();
   if (stateChanged) TERMINAL.append(a.name, a.color, update);
   renderSidebar();

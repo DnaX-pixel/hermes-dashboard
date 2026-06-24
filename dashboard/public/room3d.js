@@ -203,38 +203,49 @@ const ROOM3D = (() => {
     const grp = new THREE.Group();
     const bodyMat = mat("#aeb8c7", { roughness: 0.35, metalness: 0.7 });
     grp.add(boxMesh(1.4, 1.5, 1.2, bodyMat, 0, 0.76, 0));
-    // door inset
+    // door inset (frame, tetap - tak berpusing)
     grp.add(boxMesh(1.1, 1.15, 0.08, mat("#8b97a8", { metalness: 0.6, roughness: 0.4 }), 0, 0.78, 0.6));
-    // round door
+
+    // Door dibina dalam sub-group dengan pivot di tepi kiri (hinge side), supaya
+    // rotation.y pada group ni berfungsi macam pintu sebenar membuka ke luar.
+    // Geometri pintu di-offset +0.46 (radius) ke arah +x relatif pivot, supaya
+    // bila pivot tu sendiri diletak di -0.46 dari center asal, visualnya tepat.
+    const doorPivot = new THREE.Group();
+    doorPivot.position.set(-0.46, 0.78, 0.64); // pivot di tepi kiri pintu
     const door = new THREE.Mesh(new THREE.CylinderGeometry(0.46, 0.46, 0.12, 32), mat("#c4cdda", { metalness: 0.8, roughness: 0.25 }));
     door.rotation.x = Math.PI / 2;
-    door.position.set(0, 0.78, 0.64);
-    grp.add(door);
-    // dial ring
+    door.position.set(0.46, 0, 0); // offset supaya pusing kat hinge, bukan kat center sendiri
+    doorPivot.add(door);
+    // dial ring + dot + handle - semua sekali dengan pintu (ikut pusing)
     const ring = new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.045, 12, 28), mat("#6b7686", { metalness: 0.7 }));
-    ring.position.set(0, 0.78, 0.72);
-    grp.add(ring);
+    ring.position.set(0.46, 0, 0.08);
+    doorPivot.add(ring);
     const dialDot = new THREE.Mesh(new THREE.SphereGeometry(0.08, 14, 14), mat("#22c55e", { emissive: "#22c55e", emissiveIntensity: 0.7 }));
-    dialDot.position.set(0, 0.78, 0.75);
-    grp.add(dialDot);
-    // handle (cross spokes)
+    dialDot.position.set(0.46, 0, 0.11);
+    doorPivot.add(dialDot);
     const spoke = mat("#5b6675", { metalness: 0.6 });
-    grp.add(boxMesh(0.52, 0.08, 0.08, spoke, 0, 0.78, 0.74));
-    grp.add(boxMesh(0.08, 0.52, 0.08, spoke, 0, 0.78, 0.74));
-    // hinges on the side
+    doorPivot.add(boxMesh(0.52, 0.08, 0.08, spoke, 0.46, 0, 0.1));
+    doorPivot.add(boxMesh(0.08, 0.52, 0.08, spoke, 0.46, 0, 0.1));
+    grp.add(doorPivot);
+
+    // hinges on the side (visual je, tetap di body)
     grp.add(boxMesh(0.1, 0.2, 0.1, mat("#6b7686", { metalness: 0.7 }), -0.6, 1.1, 0.5));
     grp.add(boxMesh(0.1, 0.2, 0.1, mat("#6b7686", { metalness: 0.7 }), -0.6, 0.45, 0.5));
+
+    grp.userData = { doorPivot, dialDot };
     return grp;
   }
 
   function buildCalculator() {
     const grp = new THREE.Group();
     grp.add(boxMesh(0.34, 0.06, 0.44, mat("#475569", { roughness: 0.5 }), 0, 0.89, 0));
-    grp.add(boxMesh(0.26, 0.02, 0.13, mat("#86efac", { emissive: "#22c55e", emissiveIntensity: 0.5 }), 0, 0.93, -0.13)); // display
+    const display = boxMesh(0.26, 0.02, 0.13, mat("#86efac", { emissive: "#22c55e", emissiveIntensity: 0.5 }), 0, 0.93, -0.13);
+    grp.add(display); // display
     // button grid
     for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) {
       grp.add(boxMesh(0.05, 0.02, 0.05, mat("#94a3b8"), -0.08 + c * 0.08, 0.93, 0.02 + r * 0.08));
     }
+    grp.userData = { display };
     return grp;
   }
 
@@ -380,13 +391,17 @@ const ROOM3D = (() => {
     furniture.position.set(0, 0, -0.9);
     furniture.add(buildDesk());
     furniture.add(buildChair());
+    let vaultRef = null;
+    let calcRef = null;
     if (agent.id === "expensepilot") {
       const vault = buildVault();
       vault.position.set(-1.9, 0, -1.4); // back-left, against the wall, clear of the desk
       furniture.add(vault);
+      vaultRef = vault;
       const calc = buildCalculator();
       calc.position.set(0.3, 0, 0); // on the desk top
       furniture.add(calc);
+      calcRef = calc;
     } else {
       const mon = buildMonitor();
       mon.position.set(0, 0, 0);
@@ -400,34 +415,311 @@ const ROOM3D = (() => {
     robot.rotation.y = slot.face;
     rig.add(robot);
 
+    // bubble group: child of rig (BUKAN robot), supaya posisi dia ikut robot
+    // bergerak tapi TIDAK ikut robot.rotation.y (bubble kena sentiasa "duduk
+    // tegak" menghadap kamera, bukan berpusing sekali dengan badan robot)
+    const bubbleGroup = new THREE.Group();
+    bubbleGroup.position.set(0, 2.55, 0.4); // tinggi atas kepala robot
+    rig.add(bubbleGroup);
+
     scene.add(rig);
-    agentRigs[agent.id] = { group: rig, robot, state: "idle", selected: false, baseColor: agent.color };
+
+    // Waypoint positions (dalam ruang LOKAL rig, sama macam furniture/robot di atas).
+    // Furniture group ada offset z:-0.9; vault & calc local pos ditambah offset tu
+    // untuk dapat posisi SEBENAR dalam ruang rig.
+    // - idle:  posisi standing asal robot (depan sekali, jauh dari furniture)
+    // - aisle: titik laluan tengah, SELARI dengan idle tapi sedikit ke belakang -
+    //          robot SENTIASA lalu sini dulu sebelum ke vault/desk, supaya tak
+    //          terus potong lurus menerusi badan furniture lain.
+    // - vault: depan vault
+    // - desk:  depan meja/kalkulator
+    const waypoints = {
+      idle: { x: 0, z: 0.6, face: slot.face },
+      aisle: { x: 0, z: 0.1, face: Math.PI }, // lorong selamat depan semua furniture
+      // sideAisle: titik di SEBELAH KIRI meja (x lebih negatif dari tepi meja
+      // x:-1.0), digunakan sebagai laluan-L supaya robot pusing keluar dulu
+      // ke kiri sebelum ke belakang menuju vault - bukan potong diagonal
+      // terus menerusi badan meja.
+      sideAisle: { x: -1.9, z: 0.1, face: Math.PI },
+      vault: { x: -1.9, z: -1.3, face: Math.PI }, // berdiri DEPAN pintu vault (vault occupy z:-2.9 to -1.7), hadap ke dalam
+      desk: { x: 0.3, z: -0.05, face: Math.PI }, // berdiri DEPAN meja (meja occupy z:-1.45 to -0.35), hadap meja
+    };
+
+    agentRigs[agent.id] = {
+      group: rig,
+      robot,
+      bubbleGroup,
+      bubbleSprite: null,
+      state: "idle",
+      selected: false,
+      baseColor: agent.color,
+      waypoints,
+      vaultRef,
+      calcRef,
+      actionQueue: [],
+      currentStep: null,
+      stepStartedAt: 0,
+      // posisi & face semasa robot (untuk lerp dalam animate loop)
+      currentPos: { x: 0, z: 0.4 },
+      currentFace: slot.face,
+    };
   }
 
-  function setAgentState(id, state, selected) {
+  // === Speech bubble (Sprite + CanvasTexture, selalu hadap kamera) ===
+  // Dipanggil setiap kali nak tunjuk/tukar "fikiran" robot di atas kepala dia.
+  // text kosong/null akan sembunyikan bubble.
+  const BUBBLE_ICONS = {
+    vault: "🔒",
+    calc: "🧮",
+    debt: "📋",
+    payment: "💸",
+    think: "💭",
+  };
+
+  function makeBubbleTexture(text, iconKey) {
+    const canvas = document.createElement("canvas");
+    canvas.width = 512;
+    canvas.height = 160;
+    const ctx = canvas.getContext("2d");
+
+    // bubble background (rounded rect, putih dengan border halus)
+    const r = 28;
+    const w = canvas.width - 16;
+    const h = canvas.height - 16;
+    const x = 8, y = 8;
+    ctx.fillStyle = "#ffffff";
+    ctx.strokeStyle = "#cbd5e1";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    // tail (segitiga kecil di bawah, arah ke robot)
+    ctx.beginPath();
+    ctx.moveTo(canvas.width / 2 - 18, y + h - 2);
+    ctx.lineTo(canvas.width / 2 + 18, y + h - 2);
+    ctx.lineTo(canvas.width / 2, y + h + 26);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // icon (emoji simple, render terus guna fillText - tak perlu asset luar)
+    const icon = BUBBLE_ICONS[iconKey] || "";
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "left";
+    let textX = x + 24;
+    if (icon) {
+      ctx.font = "56px sans-serif";
+      ctx.fillText(icon, x + 16, y + h / 2);
+      textX = x + 90;
+    }
+    ctx.fillStyle = "#1e293b";
+    ctx.font = "500 38px Inter, sans-serif";
+    ctx.fillText(text, textX, y + h / 2);
+
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.needsUpdate = true;
+    return tex;
+  }
+
+  function setSpeechBubble(rig, text, iconKey) {
+    if (!text) {
+      if (rig.bubbleSprite) rig.bubbleSprite.visible = false;
+      return;
+    }
+    if (rig.bubbleSprite) {
+      rig.bubbleGroup.remove(rig.bubbleSprite);
+      rig.bubbleSprite.material.map.dispose();
+      rig.bubbleSprite.material.dispose();
+    }
+    const tex = makeBubbleTexture(text, iconKey);
+    const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false });
+    const sprite = new THREE.Sprite(mat);
+    sprite.scale.set(1.45, 0.45, 1);
+    sprite.position.set(0, 0, 0);
+    rig.bubbleGroup.add(sprite);
+    rig.bubbleSprite = sprite;
+    sprite.visible = true;
+  }
+
+  // === Action sequences ===
+  // Setiap "action" (dihantar dari watcher via WebSocket) map ke satu siri
+  // langkah. Setiap langkah ada waypoint (key dalam rig.waypoints, atau "idle"),
+  // durationMs untuk berjalan ke sana, holdMs untuk berhenti sekejap di situ,
+  // dan onArrive (efek visual - vault buka, kalkulator flicker, dll).
+  //
+  // Jumlah lebih kurang 5.5s untuk expense biasa (padan dengan actionDurationMs
+  // default di watcher).
+  const ACTION_SEQUENCES = {
+    expense_small: [
+      { to: "aisle", durationMs: 700, holdMs: 0, onArrive: (rig) => setSpeechBubble(rig, "Heading to vault...", "vault") },
+      { to: "sideAisle", durationMs: 600, holdMs: 0 },
+      { to: "vault", durationMs: 500, holdMs: 500, onArrive: (rig) => { vaultDoor(rig, true); setSpeechBubble(rig, "Getting cash", "vault"); } },
+      { to: "sideAisle", durationMs: 500, holdMs: 0, onArrive: (rig) => vaultDoor(rig, false) },
+      { to: "aisle", durationMs: 600, holdMs: 0 },
+      { to: "desk", durationMs: 700, holdMs: 1300, onArrive: (rig) => { calcFlicker(rig); setSpeechBubble(rig, "Logging expense...", "calc"); } },
+      { to: "aisle", durationMs: 700, holdMs: 0, onArrive: (rig) => setSpeechBubble(rig, null) },
+      { to: "idle", durationMs: 700, holdMs: 0 },
+    ],
+    expense_large: [
+      { to: "aisle", durationMs: 700, holdMs: 0, onArrive: (rig) => setSpeechBubble(rig, "Heading to vault...", "vault") },
+      { to: "sideAisle", durationMs: 600, holdMs: 0 },
+      { to: "vault", durationMs: 500, holdMs: 600, onArrive: (rig) => { vaultDoor(rig, true); setSpeechBubble(rig, "Large amount, checking...", "vault"); } },
+      { to: "sideAisle", durationMs: 500, holdMs: 0, onArrive: (rig) => vaultDoor(rig, false) },
+      { to: "aisle", durationMs: 600, holdMs: 0 },
+      { to: "desk", durationMs: 700, holdMs: 2000, onArrive: (rig) => { calcFlicker(rig); visorFlash(rig, "#ef4444"); setSpeechBubble(rig, "Double-checking total...", "calc"); } },
+      { to: "aisle", durationMs: 700, holdMs: 0, onArrive: (rig) => setSpeechBubble(rig, null) },
+      { to: "idle", durationMs: 700, holdMs: 0 },
+    ],
+    debt_new: [
+      { to: "aisle", durationMs: 700, holdMs: 0, onArrive: (rig) => setSpeechBubble(rig, "New debt entry...", "debt") },
+      { to: "sideAisle", durationMs: 600, holdMs: 0 },
+      { to: "vault", durationMs: 500, holdMs: 1600, onArrive: (rig) => { vaultDoor(rig, true); visorFlash(rig, "#f59e0b"); setSpeechBubble(rig, "Filing IOU record", "debt"); } },
+      { to: "sideAisle", durationMs: 500, holdMs: 0, onArrive: (rig) => { vaultDoor(rig, false); setSpeechBubble(rig, null); } },
+      { to: "aisle", durationMs: 600, holdMs: 0 },
+      { to: "idle", durationMs: 700, holdMs: 0 },
+    ],
+    debt_payment: [
+      { to: "aisle", durationMs: 700, holdMs: 0, onArrive: (rig) => setSpeechBubble(rig, "Recording payment...", "payment") },
+      { to: "sideAisle", durationMs: 600, holdMs: 0 },
+      { to: "vault", durationMs: 500, holdMs: 1800, onArrive: (rig) => { vaultDoor(rig, true); dialPulse(rig); setSpeechBubble(rig, "Updating balance", "payment"); } },
+      { to: "sideAisle", durationMs: 500, holdMs: 0, onArrive: (rig) => { vaultDoor(rig, false); setSpeechBubble(rig, null); } },
+      { to: "aisle", durationMs: 600, holdMs: 0 },
+      { to: "idle", durationMs: 700, holdMs: 0 },
+    ],
+  };
+
+  // Efek: buka/tutup pintu vault (rotate doorPivot). Animator (dalam animate())
+  // akan baca rig.vaultDoorTarget dan lerp doorPivot.rotation.y ke arah tu.
+  function vaultDoor(rig, open) {
+    if (!rig.vaultRef) return;
+    rig.vaultDoorTarget = open ? -1.7 : 0; // radian, buka ke luar
+  }
+  // Efek: kalkulator "kira" - flicker display sekejap (warna berubah-ubah)
+  function calcFlicker(rig) {
+    if (!rig.calcRef) return;
+    rig.calcFlickerUntil = performance.now() + 1200;
+  }
+  // Efek: visor flash warna tertentu sekejap (cth merah untuk "expense besar",
+  // amber untuk "hutang baru"), lepas tu balik ke warna biasa.
+  function visorFlash(rig, hexColor) {
+    rig.visorFlashColor = hexColor;
+    rig.visorFlashUntil = performance.now() + 1500;
+  }
+  // Efek: dial vault berkedip hijau (anggap "progress/payment")
+  function dialPulse(rig) {
+    if (!rig.vaultRef) return;
+    rig.dialPulseUntil = performance.now() + 1800;
+  }
+
+  // Mula satu action sequence untuk satu agent. Kalau ada sequence lain
+  // sedang jalan, ia akan digantikan (queue baru menang).
+  function runAction(id, actionName) {
     const rig = agentRigs[id];
     if (!rig) return;
+    const sequence = ACTION_SEQUENCES[actionName];
+    if (!sequence) return; // action tak dikenali / null -> tak buat apa-apa animasi khas
+
+    rig.actionQueue = sequence.slice(); // copy, supaya boleh shift() tanpa rosak definition asal
+    rig.currentStep = null; // animate loop akan ambil step pertama pada frame seterusnya
+  }
+
+  function setAgentState(id, state, selected, action) {
+    const rig = agentRigs[id];
+    if (!rig) return;
+    const actionChanged = action && action !== rig.lastAction;
     rig.state = state;
     rig.selected = selected;
+    rig.lastAction = action;
+    if (actionChanged) runAction(id, action);
   }
 
   function animate() {
     requestAnimationFrame(animate);
     const t = clock.getElapsedTime();
+    const now = performance.now();
 
     Object.values(agentRigs).forEach((rig) => {
-      const active = rig.state !== "idle" && rig.state !== "unavailable";
       const robot = rig.robot;
       const parts = robot.userData.parts;
 
-      // bob
-      const targetY = active ? Math.sin(t * 2.4) * 0.06 + 0.06 : 0;
+      // === Action queue: gerakkan robot antara waypoint ikut sequence semasa ===
+      if (rig.currentStep === null && rig.actionQueue.length > 0) {
+        // Mula step seterusnya dalam queue
+        const step = rig.actionQueue.shift();
+        rig.currentStep = step;
+        rig.stepStartedAt = now;
+        rig.stepArrived = false;
+      }
+      if (rig.currentStep) {
+        const step = rig.currentStep;
+        const target = rig.waypoints[step.to] || rig.waypoints.idle;
+        const elapsed = now - rig.stepStartedAt;
+        const moveProgress = Math.min(1, elapsed / step.durationMs);
+
+        if (!rig.moveStartPos) rig.moveStartPos = { x: rig.currentPos.x, z: rig.currentPos.z, face: rig.currentFace };
+        if (moveProgress < 1) {
+          // ease in-out ringkas
+          const ease = moveProgress < 0.5 ? 2 * moveProgress * moveProgress : 1 - Math.pow(-2 * moveProgress + 2, 2) / 2;
+          rig.currentPos.x = rig.moveStartPos.x + (target.x - rig.moveStartPos.x) * ease;
+          rig.currentPos.z = rig.moveStartPos.z + (target.z - rig.moveStartPos.z) * ease;
+        } else {
+          rig.currentPos.x = target.x;
+          rig.currentPos.z = target.z;
+          if (!rig.stepArrived) {
+            rig.stepArrived = true;
+            rig.arrivedAt = now;
+            if (step.onArrive) step.onArrive(rig);
+          }
+          const holdElapsed = now - rig.arrivedAt;
+          if (holdElapsed >= (step.holdMs || 0)) {
+            // step ni selesai - bersedia untuk step seterusnya pada frame depan
+            rig.currentStep = null;
+            rig.moveStartPos = null;
+          }
+        }
+        // muka robot hadap arah waypoint semasa
+        rig.currentFace = target.face;
+      }
+
+      // Apply posisi/face semasa ke robot mesh sebenar
+      robot.position.x = rig.currentPos.x;
+      robot.position.z = rig.currentPos.z;
+
+      // Bubble ikut posisi x/z robot (height tetap, sebab bubbleGroup adalah
+      // child rig bukan child robot - jadi tak ikut robot.rotation.y, kekal
+      // sentiasa "tegak" tak kira robot tengah pusing arah mana)
+      rig.bubbleGroup.position.x = rig.currentPos.x;
+      rig.bubbleGroup.position.z = rig.currentPos.z;
+
+      const active = rig.state !== "idle" && rig.state !== "unavailable";
+
+      // bob (lebih halus bila tengah bergerak/beraksi, supaya tak clash dengan posisi)
+      const targetY = active ? Math.sin(t * 2.4) * 0.05 + 0.05 : 0;
       robot.position.y += (targetY - robot.position.y) * 0.1;
 
-      // visor glow intensity
+      // visor glow intensity (+ flash warna sementara kalau ada)
       if (parts && parts.visorGlow) {
-        const target = rig.state === "unavailable" ? 0.05 : active ? 0.7 + Math.sin(t * 3) * 0.25 : 0.35;
-        parts.visorGlow.material.emissiveIntensity += (target - parts.visorGlow.material.emissiveIntensity) * 0.1;
+        const flashing = rig.visorFlashUntil && now < rig.visorFlashUntil;
+        if (flashing) {
+          parts.visorGlow.material.color.set(rig.visorFlashColor);
+          parts.visorGlow.material.emissive.set(rig.visorFlashColor);
+          parts.visorGlow.material.emissiveIntensity = 0.9;
+        } else {
+          if (rig.visorFlashUntil) {
+            // baru habis flash - reset balik ke warna asal visor
+            parts.visorGlow.material.color.set("#bff0ff");
+            parts.visorGlow.material.emissive.set("#7fd8ff");
+            rig.visorFlashUntil = null;
+          }
+          const target = rig.state === "unavailable" ? 0.05 : active ? 0.7 + Math.sin(t * 3) * 0.25 : 0.35;
+          parts.visorGlow.material.emissiveIntensity += (target - parts.visorGlow.material.emissiveIntensity) * 0.1;
+        }
       }
       // antenna pulse when logging/working/thinking
       if (parts && parts.tip) {
@@ -438,7 +730,31 @@ const ROOM3D = (() => {
 
       // selected: gentle full-rig spin offset (subtle yaw wobble)
       const baseYaw = rig.selected ? Math.sin(t * 1.5) * 0.08 : 0;
-      robot.rotation.y += (((rig.group.userData.face || 0) + baseYaw) - robot.rotation.y) * 0.1;
+      robot.rotation.y += ((rig.currentFace + baseYaw) - robot.rotation.y) * 0.12;
+
+      // === Furniture effects ===
+      // Vault door: lerp rotation ke target (dibuka/ditutup oleh vaultDoor())
+      if (rig.vaultRef && rig.vaultRef.userData.doorPivot) {
+        const doorPivot = rig.vaultRef.userData.doorPivot;
+        const targetRot = rig.vaultDoorTarget || 0;
+        doorPivot.rotation.y += (targetRot - doorPivot.rotation.y) * 0.15;
+
+        // dial pulse hijau (anggap "payment progress")
+        if (rig.vaultRef.userData.dialDot) {
+          if (rig.dialPulseUntil && now < rig.dialPulseUntil) {
+            rig.vaultRef.userData.dialDot.material.emissiveIntensity = 0.5 + Math.abs(Math.sin(now / 120)) * 1.2;
+          } else {
+            rig.vaultRef.userData.dialDot.material.emissiveIntensity = 0.7;
+          }
+        }
+      }
+      // Calculator display flicker (anggap "tengah kira")
+      if (rig.calcRef && rig.calcRef.userData.display) {
+        const flickering = rig.calcFlickerUntil && now < rig.calcFlickerUntil;
+        rig.calcRef.userData.display.material.emissiveIntensity = flickering
+          ? 0.3 + Math.abs(Math.sin(now / 70)) * 1.0
+          : 0.5;
+      }
     });
 
     if (controls) controls.update();

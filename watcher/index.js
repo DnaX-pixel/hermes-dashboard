@@ -47,7 +47,12 @@ function handleStateChange(agentId, partialState) {
     updated_at: Date.now(),
   };
   io.emit("agent:state", { agentId, ...currentState[agentId] });
-  console.log(`[state] ${agentId} ->`, partialState.state, partialState.label || "");
+  console.log(
+    `[state] ${agentId} ->`,
+    partialState.state,
+    partialState.action ? `(${partialState.action})` : "",
+    partialState.label || ""
+  );
 }
 
 // Start a watcher per agent, based on its configured watch.type

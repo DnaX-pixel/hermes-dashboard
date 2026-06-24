@@ -40,7 +40,7 @@ module.exports = [
       spreadsheetId: "1EFxXhmi60Mqk7tDZk0CxvOiuXKOm4Zj-A5wOKcymVA8",
       credentialsPath: process.env.GOOGLE_CREDENTIALS_PATH || "/opt/credentials/google-service-account.json",
       pollIntervalMs: 10000, // poll setiap 10 saat
-      activeDurationMs: 4000, // kekal "logging" selama 4 saat lepas row baru dikesan
+      actionDurationMs: 5500, // berapa lama animasi sequence (jalan ke vault/meja, balik) ambil masa
       sheets: [
         {
           tab: "Expenses",
@@ -48,6 +48,9 @@ module.exports = [
           // Column header sebenar (row 1): ID, Date, Time, Merchant, Description, Amount, ...
           labelFrom: (row) =>
             `${row.Merchant || row.Description || "Expense"} - RM${Number(row.Amount || 0).toFixed(2)}`,
+          // Expense >= RM100 dapat animasi "expense_large" (robot check lebih teliti
+          // kat meja + visor flash sekejap), selain tu "expense_small" (animasi ringkas).
+          actionFrom: (row) => (Number(row.Amount || 0) >= 100 ? "expense_large" : "expense_small"),
         },
         {
           tab: "Debts",
@@ -55,6 +58,12 @@ module.exports = [
           // Column header sebenar (row 1): DebtID, DebtType, PersonName, ..., Amount, ...
           labelFrom: (row) =>
             `Hutang: ${row.PersonName || "?"} - RM${Number(row.Amount || 0).toFixed(2)}`,
+          // NOTA: setakat ni semua row baru dalam Debts dianggap "debt_new"
+          // (robot letak rekod dalam vault). Belum bezakan "bayaran hutang"
+          // (debt_payment) sebab perlu tahu macam mana ExpensePilot sebenarnya
+          // tulis update bayaran - row baru, atau edit row sedia ada? Tanya
+          // Daniel & sesuaikan logic ni lepas confirm.
+          actionFrom: () => "debt_new",
         },
       ],
     },
