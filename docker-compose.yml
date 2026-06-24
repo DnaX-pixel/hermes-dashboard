@@ -19,6 +19,7 @@ services:
       - DATA_ROOT=/opt/data
       - PORT=4500
       - GOOGLE_CREDENTIALS_PATH=/opt/credentials/google-service-account.json
+      - OLLAMA_API_KEY=${OLLAMA_API_KEY}
     volumes:
       # :ro = read-only. Watcher TIDAK boleh tulis/ubah apa-apa dalam data Hermes.
       - /docker/hermes-agent-o8vg/data:/opt/data:ro

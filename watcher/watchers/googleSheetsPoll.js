@@ -4,8 +4,9 @@
 //
 // Poll satu atau lebih tab dalam satu Google Sheet (cth: "Expenses" + "Debts")
 // guna Service Account credential (read-only). Bila row count sesuatu tab
-// bertambah berbanding poll sebelumnya, anggap row baru = trigger "logging"
-// dengan satu "action" spesifik (untuk animasi frontend) + metadata.
+// bertambah berbanding poll sebelumnya, anggap row baru = panggil LLM
+// (Ollama Cloud) untuk PUTUSKAN macam mana robot ExpensePilot patut bergerak
+// dan bertindak balas - bukan sekadar pilih dari "action" pra-takrif.
 //
 // Config (dalam agents.config.js) untuk agent yang guna watcher ni:
 //   watch: {
@@ -13,36 +14,30 @@
 //     spreadsheetId: "...",
 //     credentialsPath: "/opt/credentials/google-service-account.json",
 //     pollIntervalMs: 10000,
-//     actionDurationMs: 5500,   // berapa lama animasi sequence frontend ambil masa
+//     actionDurationMs: 5500,      // hard cap - paksa balik idle kalau LLM/sequence terlalu lama
+//     llm: {
+//       baseUrl: "https://ollama.com",
+//       apiKey: process.env.OLLAMA_API_KEY,
+//       model: "gpt-oss:20b-cloud",
+//       timeoutMs: 12000,
+//     },
 //     sheets: [
-//       {
-//         tab: "Expenses",
-//         range: "A:S",
-//         labelFrom: (row) => `${row.Merchant || row.Description || "Expense"} - RM${Number(row.Amount || 0).toFixed(2)}`,
-//         actionFrom: (row) => Number(row.Amount || 0) >= 100 ? "expense_large" : "expense_small",
-//       },
-//       {
-//         tab: "Debts",
-//         range: "A:X",
-//         labelFrom: (row) => `Hutang: ${row.PersonName || "?"} - RM${Number(row.Amount || 0).toFixed(2)}`,
-//         actionFrom: (row, prevRow) => {
-//           // kalau RemainingAmount didapati DAN lebih rendah dari row sebelumnya
-//           // dengan PersonName sama -> anggap ni bayaran, bukan hutang baru.
-//           return "debt_new";
-//         },
-//       },
+//       { tab: "Expenses", range: "A:S", rowType: "expense" },
+//       { tab: "Debts", range: "A:X", rowType: "debt" },
 //     ],
 //   }
 //
-// "action" yang frontend (room3d.js) faham sekarang:
-//   expense_small, expense_large, debt_new, debt_payment
-// (kalau actionFrom tak diberi, default = "expense_small" supaya tetap ada animasi asas)
+// LLM decision dikira dalam watchers/../llmDecision.js (lihat fail tu untuk
+// schema, validation, dan fallback). Kalau LLM gagal/timeout, kita tetap
+// hantar fallback deterministic - robot tak sekali-kali "freeze".
 //
-// Kredential Service Account TIDAK PERNAH ditulis ke log atau dihantar ke
-// frontend - ia cuma dibaca sekali untuk auth, kekal dalam memory container watcher.
+// Kredential Service Account & Ollama API key TIDAK PERNAH ditulis ke log
+// atau dihantar ke frontend - cuma dibaca sekali untuk auth.
 
 const fs = require("fs");
+const path = require("path");
 const { google } = require("googleapis");
+const llmDecision = require(path.join(__dirname, "..", "llmDecision"));
 
 function rowsToObjects(values) {
   // values: array-of-arrays dari Sheets API. Row pertama = header.
@@ -68,6 +63,12 @@ function start(agent, dataRoot, onStateChange) {
     console.warn(`[googleSheetsPoll] config tak lengkap untuk agent "${agent.id}", skip.`);
     return () => {};
   }
+  if (!cfg.llm || !cfg.llm.apiKey) {
+    console.warn(
+      `[googleSheetsPoll] config.llm/apiKey tak lengkap untuk agent "${agent.id}". ` +
+        `Robot akan guna fallback decision sahaja (tiada "fikiran" LLM).`
+    );
+  }
 
   if (!fs.existsSync(cfg.credentialsPath)) {
     console.warn(
@@ -89,14 +90,14 @@ function start(agent, dataRoot, onStateChange) {
     return () => {};
   }
 
-  // Track row count + row terakhir setiap tab, supaya kita boleh detect row
-  // baru DAN bandingkan dengan row sebelumnya (untuk kes "debt_payment" cth).
+  // Track row count setiap tab, supaya kita boleh detect row baru.
   const lastRowCount = {};
-  const lastRowsByKey = {}; // tab -> Map(personName/id -> row terakhir), untuk detect "payment" pada Debts
   let activeTimer = null;
   let stopped = false;
+  let busyDeciding = false; // elak overlap kalau LLM call lambat & poll seterusnya dah start
 
   async function pollOnce() {
+    if (busyDeciding) return; // tunggu LLM call sebelum ni habis dulu
     for (const sheetCfg of cfg.sheets) {
       try {
         const res = await sheetsApi.spreadsheets.values.get({
@@ -109,27 +110,49 @@ function start(agent, dataRoot, onStateChange) {
 
         if (prevCount !== undefined && count > prevCount) {
           const newest = rows[rows.length - 1];
-          const label = sheetCfg.labelFrom ? sheetCfg.labelFrom(newest) : `New entry in ${sheetCfg.tab}`;
-          const action = sheetCfg.actionFrom ? sheetCfg.actionFrom(newest, rows) : "expense_small";
-          const meta = {
-            amount: Number(newest.Amount || 0),
-            category: newest.Category,
-            merchant: newest.Merchant,
-            personName: newest.PersonName,
-          };
+          const rowType = sheetCfg.rowType || "expense";
+          // Context: beberapa row terkini (selain yang baru) untuk bantu LLM
+          // bandingkan (cth "ni kali ke-3 makan luar minggu ni").
+          const context = rows.slice(-6, -1);
 
-          onStateChange(agent.id, { state: "logging", label, action, meta });
+          busyDeciding = true;
+          // Label ringkas untuk sidebar/terminal (sementara LLM "fikir").
+          const quickLabel =
+            rowType === "debt"
+              ? `Hutang: ${newest.PersonName || "?"} - RM${Number(newest.Amount || 0).toFixed(2)}`
+              : `${newest.Merchant || newest.Description || "Expense"} - RM${Number(newest.Amount || 0).toFixed(2)}`;
+          onStateChange(agent.id, { state: "logging", label: quickLabel, decision: null });
+
+          let decision;
+          try {
+            decision = cfg.llm && cfg.llm.apiKey
+              ? await llmDecision.decide(rowType, newest, context, cfg.llm)
+              : llmDecision.fallbackDecision(rowType);
+          } catch (e) {
+            console.error(`[googleSheetsPoll] llmDecision.decide() gagal tanpa ditangkap dalaman:`, e.message);
+            decision = llmDecision.fallbackDecision(rowType);
+          }
+          busyDeciding = false;
+
+          onStateChange(agent.id, { state: "logging", label: quickLabel, decision });
+
+          // Hard cap - kalau jumlah durationMs+holdMs sequence kurang dari
+          // actionDurationMs, kita still paksa balik "idle" lepas tempoh ni
+          // sebagai safety net tambahan (elak robot stuck kalau ada bug lain).
+          const totalSequenceMs = decision.moves.reduce((sum, m) => sum + m.durationMs + m.holdMs, 0);
+          const waitMs = Math.max(totalSequenceMs, actionDurationMs);
 
           if (activeTimer) clearTimeout(activeTimer);
           activeTimer = setTimeout(() => {
-            if (!stopped) onStateChange(agent.id, { state: "idle", label: "Idle", action: null });
-          }, actionDurationMs);
+            if (!stopped) onStateChange(agent.id, { state: "idle", label: "Idle", decision: null });
+          }, waitMs);
         }
 
         lastRowCount[sheetCfg.tab] = count;
       } catch (err) {
         // Jangan crash seluruh watcher kalau satu tab gagal (cth: rate limit sekejap,
         // atau nama tab silap) - log dan cuba lagi pada poll seterusnya.
+        busyDeciding = false;
         console.error(
           `[googleSheetsPoll] gagal baca tab "${sheetCfg.tab}" (agent: ${agent.id}):`,
           err.message

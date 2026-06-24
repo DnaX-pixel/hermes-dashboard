@@ -555,43 +555,17 @@ const ROOM3D = (() => {
   //
   // Jumlah lebih kurang 5.5s untuk expense biasa (padan dengan actionDurationMs
   // default di watcher).
-  const ACTION_SEQUENCES = {
-    expense_small: [
-      { to: "aisle", durationMs: 700, holdMs: 0, onArrive: (rig) => setSpeechBubble(rig, "Heading to vault...", "vault") },
-      { to: "sideAisle", durationMs: 600, holdMs: 0 },
-      { to: "vault", durationMs: 500, holdMs: 500, onArrive: (rig) => { vaultDoor(rig, true); setSpeechBubble(rig, "Getting cash", "vault"); } },
-      { to: "sideAisle", durationMs: 500, holdMs: 0, onArrive: (rig) => vaultDoor(rig, false) },
-      { to: "aisle", durationMs: 600, holdMs: 0 },
-      { to: "desk", durationMs: 700, holdMs: 1300, onArrive: (rig) => { calcFlicker(rig); setSpeechBubble(rig, "Logging expense...", "calc"); } },
-      { to: "aisle", durationMs: 700, holdMs: 0, onArrive: (rig) => setSpeechBubble(rig, null) },
-      { to: "idle", durationMs: 700, holdMs: 0 },
-    ],
-    expense_large: [
-      { to: "aisle", durationMs: 700, holdMs: 0, onArrive: (rig) => setSpeechBubble(rig, "Heading to vault...", "vault") },
-      { to: "sideAisle", durationMs: 600, holdMs: 0 },
-      { to: "vault", durationMs: 500, holdMs: 600, onArrive: (rig) => { vaultDoor(rig, true); setSpeechBubble(rig, "Large amount, checking...", "vault"); } },
-      { to: "sideAisle", durationMs: 500, holdMs: 0, onArrive: (rig) => vaultDoor(rig, false) },
-      { to: "aisle", durationMs: 600, holdMs: 0 },
-      { to: "desk", durationMs: 700, holdMs: 2000, onArrive: (rig) => { calcFlicker(rig); visorFlash(rig, "#ef4444"); setSpeechBubble(rig, "Double-checking total...", "calc"); } },
-      { to: "aisle", durationMs: 700, holdMs: 0, onArrive: (rig) => setSpeechBubble(rig, null) },
-      { to: "idle", durationMs: 700, holdMs: 0 },
-    ],
-    debt_new: [
-      { to: "aisle", durationMs: 700, holdMs: 0, onArrive: (rig) => setSpeechBubble(rig, "New debt entry...", "debt") },
-      { to: "sideAisle", durationMs: 600, holdMs: 0 },
-      { to: "vault", durationMs: 500, holdMs: 1600, onArrive: (rig) => { vaultDoor(rig, true); visorFlash(rig, "#f59e0b"); setSpeechBubble(rig, "Filing IOU record", "debt"); } },
-      { to: "sideAisle", durationMs: 500, holdMs: 0, onArrive: (rig) => { vaultDoor(rig, false); setSpeechBubble(rig, null); } },
-      { to: "aisle", durationMs: 600, holdMs: 0 },
-      { to: "idle", durationMs: 700, holdMs: 0 },
-    ],
-    debt_payment: [
-      { to: "aisle", durationMs: 700, holdMs: 0, onArrive: (rig) => setSpeechBubble(rig, "Recording payment...", "payment") },
-      { to: "sideAisle", durationMs: 600, holdMs: 0 },
-      { to: "vault", durationMs: 500, holdMs: 1800, onArrive: (rig) => { vaultDoor(rig, true); dialPulse(rig); setSpeechBubble(rig, "Updating balance", "payment"); } },
-      { to: "sideAisle", durationMs: 500, holdMs: 0, onArrive: (rig) => { vaultDoor(rig, false); setSpeechBubble(rig, null); } },
-      { to: "aisle", durationMs: 600, holdMs: 0 },
-      { to: "idle", durationMs: 700, holdMs: 0 },
-    ],
+  // === Effect mapping ===
+  // "effect" string yang datang dari backend (LLM decision atau fallback)
+  // di-map ke fungsi visual yang sebenar di sini. Backend cuma hantar NAMA
+  // effect (string), frontend yang tentukan macam mana effect tu kelihatan -
+  // ini sengaja, supaya LLM tak perlu (dan tak boleh) terus manipulate Three.js
+  // internals, cuma pilih dari "menu" effect yang kita sediakan.
+  const EFFECT_HANDLERS = {
+    vault_open: (rig) => vaultDoor(rig, true),
+    vault_close: (rig) => vaultDoor(rig, false),
+    calc_flicker: (rig) => calcFlicker(rig),
+    dial_pulse: (rig) => dialPulse(rig),
   };
 
   // Efek: buka/tutup pintu vault (rotate doorPivot). Animator (dalam animate())
@@ -617,26 +591,76 @@ const ROOM3D = (() => {
     rig.dialPulseUntil = performance.now() + 1800;
   }
 
-  // Mula satu action sequence untuk satu agent. Kalau ada sequence lain
-  // sedang jalan, ia akan digantikan (queue baru menang).
-  function runAction(id, actionName) {
-    const rig = agentRigs[id];
-    if (!rig) return;
-    const sequence = ACTION_SEQUENCES[actionName];
-    if (!sequence) return; // action tak dikenali / null -> tak buat apa-apa animasi khas
+  // === Bina action queue daripada satu "decision" (datang dari LLM via
+  // watcher, ATAU fallback deterministic - kedua-dua guna struktur sama). ===
+  // decision = { thought, mood, visorColor, moves: [{waypoint,durationMs,holdMs,effect}] }
+  //
+  // NOTA KESELAMATAN: walaupun backend (llmDecision.js) dah validate/clamp
+  // nilai-nilai ni, kita ULANG semak waypoint di sini SEKALI LAGI sebelum
+  // animate - defense in depth. Kalau ada waypoint yang frontend tak kenal
+  // (cth backend version lama/baru tak sepadan), kita skip step tu dengan
+  // selamat, bukan crash atau buat robot teleport ke (undefined, undefined).
+  function buildSequenceFromDecision(rig, decision) {
+    const sequence = decision.moves
+      .filter((m) => rig.waypoints[m.waypoint])
+      .map((m, i, arr) => ({
+        to: m.waypoint,
+        durationMs: m.durationMs,
+        holdMs: m.holdMs,
+        onArrive: (r) => {
+          if (m.effect && EFFECT_HANDLERS[m.effect]) EFFECT_HANDLERS[m.effect](r);
+          // Bubble: tunjuk "thought" LLM pada step PERTAMA (bila robot baru
+          // mula bergerak), sembunyikan bila sampai balik ke idle (step akhir).
+          if (i === 0) setSpeechBubble(r, decision.thought, moodToIcon(decision.mood));
+          if (i === arr.length - 1 && m.waypoint === "idle") setSpeechBubble(r, null);
+        },
+      }));
 
-    rig.actionQueue = sequence.slice(); // copy, supaya boleh shift() tanpa rosak definition asal
-    rig.currentStep = null; // animate loop akan ambil step pertama pada frame seterusnya
+    // Safety net frontend: kalau semua move kena filter keluar (semua
+    // waypoint tak dikenali - sangat jarang berlaku), jangan biarkan sequence
+    // kosong; terus letak satu step balik idle supaya robot tak "diam" je.
+    if (sequence.length === 0) {
+      sequence.push({ to: "idle", durationMs: 700, holdMs: 0 });
+    }
+    return sequence;
   }
 
-  function setAgentState(id, state, selected, action) {
+  function moodToIcon(mood) {
+    if (mood === "concerned" || mood === "alert") return "vault";
+    if (mood === "pleased") return "payment";
+    return "calc";
+  }
+
+  // Mula satu action sequence (dari decision LLM/fallback) untuk satu agent.
+  // Kalau ada sequence lain sedang jalan, ia akan digantikan (decision baru menang).
+  function runDecision(id, decision) {
+    const rig = agentRigs[id];
+    if (!rig || !decision) return;
+    rig.actionQueue = buildSequenceFromDecision(rig, decision);
+    rig.currentStep = null; // animate loop akan ambil step pertama pada frame seterusnya
+
+    // Visor color pilihan LLM (cth merah utk "concerned", hijau utk "pleased")
+    // dipakai sepanjang sequence ni jalan - guna mekanisme visorFlash sedia ada,
+    // tapi dengan tempoh = jumlah keseluruhan sequence.
+    if (decision.visorColor) {
+      const totalMs = decision.moves.reduce((sum, m) => sum + m.durationMs + m.holdMs, 0);
+      rig.visorFlashColor = decision.visorColor;
+      rig.visorFlashUntil = performance.now() + Math.max(totalMs, 1000);
+    }
+  }
+
+  function setAgentState(id, state, selected, decision) {
     const rig = agentRigs[id];
     if (!rig) return;
-    const actionChanged = action && action !== rig.lastAction;
     rig.state = state;
     rig.selected = selected;
-    rig.lastAction = action;
-    if (actionChanged) runAction(id, action);
+    // Bandingkan reference object decision - watcher hantar object BARU setiap
+    // kali ada keputusan baru (termasuk null semasa "loading"), jadi
+    // perbandingan reference cukup untuk detect "ini decision baru".
+    if (decision && decision !== rig.lastDecision) {
+      rig.lastDecision = decision;
+      runDecision(id, decision);
+    }
   }
 
   function animate() {
