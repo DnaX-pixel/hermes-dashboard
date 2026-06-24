@@ -453,7 +453,9 @@ const ROOM3D = (() => {
     let calcRef = null;
     if (agent.hasVault) {
       const vault = buildVault();
-      vault.position.set(-1.9, 0, -1.4); // back-left, against the wall, clear of the desk
+      // Vault diletakkan DI BELAKANG agent (z negatif = wall), bukan ke kiri
+      // supaya nampak jelas di "station" agent tu, tak overlap dengan agent lain
+      vault.position.set(0, 0, -2.2);
       furniture.add(vault);
       vaultRef = vault;
       const calc = buildCalculator();
